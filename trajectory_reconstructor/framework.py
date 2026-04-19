@@ -72,8 +72,8 @@ class TrajectoryFramework:
         self._tracker = tracker
 
     def run(self, observations: Iterable[Observation]) -> TrackedTrajectory:
-        normalized_observations: List[Observation] = list(
+        preprocessed_observations: List[Observation] = list(
             self._preprocessor.preprocess(observations)
         )
-        reconstructed_path = self._reconstructor.reconstruct(normalized_observations)
+        reconstructed_path = self._reconstructor.reconstruct(preprocessed_observations)
         return self._tracker.track(reconstructed_path)
