@@ -38,7 +38,7 @@ class FakeTracker(TrajectoryTracker):
         return TrackedTrajectory(path=path, track_id="demo-track")
 
 
-class FrameworkTests(unittest.TestCase):
+class TestTrajectoryFramework(unittest.TestCase):
     def test_framework_runs_pipeline_in_order(self):
         preprocessor = FakePreprocessor()
         reconstructor = FakeReconstructor()
