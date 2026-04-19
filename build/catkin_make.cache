@@ -1,0 +1,2 @@
+move_car
+-DCATKIN_DEVEL_PREFIX=/home/ubuntu/drive_car_copy/devel -DCMAKE_INSTALL_PREFIX=/home/ubuntu/drive_car_copy/install -G Unix Makefiles

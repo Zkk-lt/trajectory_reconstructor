@@ -1,0 +1,193 @@
+<!-- <launch>
+    <node pkg="move_car" type="control_pub"  name="publish_speed_turn" output="screen">
+        <param name="control_rate" value="20.0" />
+        <param name="max_speed" value="0.50" />
+        <param name="max_accel" value="0.10" />
+        <param name="min_accel" value="-0.22" />
+        <param name="max_steer" value="0.38" />
+        <param name="max_steer_rate" value="0.06" />
+        <param name="desired_follow_distance" value="1.55" />
+        <param name="target_timeout" value="0.60" />
+        <param name="target_hold_timeout" value="1.00" />
+        <param name="emergency_stop_distance" value="0.50" />
+        <param name="stop_buffer_distance" value="0.70" />
+        <param name="horizon_steps" value="20" />
+        <param name="horizon_dt" value="0.10" />
+        <param name="reference_history_window" value="1.00" />
+        <param name="fit_min_samples" value="4" />
+        <param name="fit_max_rms" value="0.35" />
+        <param name="fit_blend_gain" value="3.6" />
+        <param name="outlier_reject_distance" value="0.30" />
+        <param name="outlier_reject_speed" value="0.55" />
+        <param name="huber_delta" value="0.08" />
+        <param name="fit_ridge_lambda" value="0.55" />
+        <param name="low_speed_heading_threshold" value="0.30" />
+        <param name="low_speed_span_threshold" value="0.55" />
+        <param name="heading_memory_alpha" value="0.90" />
+        <param name="curvature_memory_alpha" value="0.88" />
+        <param name="max_curvature" value="0.14" />
+        <param name="max_curvature_rate" value="0.012" />
+        <param name="max_heading_step" value="0.035" />
+        <param name="gap_speed_gain" value="0.16" />
+        <param name="fit_bad_speed_scale" value="0.80" />
+        <param name="min_progress_speed" value="0.16" />
+        <param name="preview_speed_steps" value="5" />
+        <param name="line_search_decay" value="0.50" />
+        <param name="temporal_heading_weight" value="2.4" />
+        <param name="temporal_speed_weight" value="1.2" />
+        <param name="lock_distance_gate" value="0.85" />
+        <param name="lock_yaw_gate" value="0.90" />
+        <param name="lock_hold_timeout" value="1.20" />
+        <param name="al_outer_iterations" value="3" />
+        <param name="al_violation_tolerance" value="0.02" />
+        <param name="mu_penalty" value="8.0" />
+        <param name="mu_growth" value="1.25" />
+        <param name="q_x" value="2.5" />
+        <param name="q_y" value="14.0" />
+        <param name="q_yaw" value="4.0" />
+        <param name="q_v" value="2.0" />
+        <param name="r_a" value="0.35" />
+        <param name="r_delta" value="0.55" />
+        <param name="r_da" value="1.40" />
+        <param name="r_ddelta" value="1.80" />
+        <param name="terminal_x_weight" value="4.0" />
+        <param name="terminal_y_weight" value="18.0" />
+        <param name="terminal_yaw_weight" value="6.0" />
+        <param name="speed_penalty" value="160.0" />
+        <param name="clearance_penalty" value="220.0" />
+    </node>
+</launch> -->
+
+
+
+
+<?xml version="1.0"?>
+<!--
+改进版本的启动文件 - 针对切弯问题的优化参数配置
+
+主要改进：
+1. 增加q_y_和q_yaw_权重 - 强化急弯时的横向和航向跟踪
+2. 降低fit_max_rms_ - 更容易触发样条插值切换
+3. 调整heading_memory_alpha_ - 快速响应航向变化
+4. 优化max_heading_step_ - 允许更快的航向变化率
+-->
+<launch>
+    <arg name="launch_reconstructor" default="true" />
+
+    <group if="$(arg launch_reconstructor)">
+        <include file="$(find move_car)/launch/trajectory_reconstructor.launch" />
+    </group>
+
+    <node pkg="move_car" type="control_pub" name="publish_speed_turn" output="screen">
+        <!-- 基础控制参数 -->
+        <param name="control_rate" value="20.0" />
+        <param name="max_speed" value="0.50" />
+        <param name="max_accel" value="0.10" />
+        <param name="min_accel" value="-0.22" />
+        <param name="max_steer" value="0.38" />
+        <param name="max_steer_rate" value="0.06" />
+        
+        <!-- 跟踪目标参数 -->
+        <param name="desired_follow_distance" value="1.00" />
+        <param name="target_timeout" value="0.60" />
+        <param name="target_hold_timeout" value="1.00" />
+        <param name="reference_topic" value="/planner/reference_path" />
+        <param name="reference_timeout" value="0.25" />
+        <param name="reference_hold_timeout" value="0.80" />
+        <param name="reference_min_points" value="5" />
+        <param name="reference_sample_spacing" value="0.12" />
+        <param name="reference_anchor_forward_offset" value="0.10" />
+        <param name="reference_anchor_lateral_weight" value="1.80" />
+        <param name="reference_quality_span" value="0.80" />
+        <param name="reference_quality_points" value="18" />
+        <param name="path_curvature_speed_gain" value="2.20" />
+        <param name="path_curvature_change_speed_gain" value="3.20" />
+        <param name="path_heading_speed_gain" value="1.05" />
+        <param name="path_hold_speed_scale" value="0.85" />
+        <param name="path_confidence_floor" value="0.35" />
+        <param name="emergency_stop_distance" value="0.50" />
+        <param name="stop_buffer_distance" value="0.50" />
+        <param name="lateral_gate" value="1.60" />
+        <param name="min_forward_target_x" value="-0.20" />
+        
+        <!-- MPC规划参数 -->
+        <param name="horizon_steps" value="20" />
+        <param name="horizon_dt" value="0.10" />
+        <param name="reference_history_window" value="1.00" />
+        
+        <!-- 轨迹拟合参数 -->
+        <param name="fit_min_samples" value="4" />
+        <param name="fit_max_rms" value="0.30" />
+        <param name="fit_blend_gain" value="2.4" />
+        <param name="outlier_reject_distance" value="0.55" />
+        <param name="outlier_reject_speed" value="1.00" />
+        <param name="huber_delta" value="0.16" />
+        <param name="fit_ridge_lambda" value="0.55" />
+        
+        <!-- 低速处理参数 -->
+        <param name="low_speed_heading_threshold" value="0.12" />
+        <param name="low_speed_span_threshold" value="0.42" />
+        <param name="heading_memory_alpha" value="0.88" />
+        <param name="curvature_memory_alpha" value="0.78" />
+        
+        <!-- 曲率限制参数 -->
+        <param name="max_curvature" value="0.24" />
+        <param name="max_curvature_rate" value="0.045" />
+        <param name="max_heading_step" value="0.10" />
+        
+        <!-- 间隙控制参数 -->
+        <param name="gap_speed_gain" value="0.24" />
+        <param name="fit_bad_speed_scale" value="0.60" />
+        <param name="min_progress_speed" value="0.10" />
+        <param name="preview_speed_steps" value="5" />
+
+        <!-- 命令平滑参数（抑制左右抖动） -->
+        <param name="pose_alpha" value="0.20" />
+        <param name="yaw_alpha" value="0.12" />
+        <param name="velocity_alpha" value="0.10" />
+        <param name="speed_cmd_alpha" value="0.10" />
+        <param name="steer_cmd_alpha" value="0.08" />
+        
+        <!-- 线搜索参数 -->
+        <param name="line_search_decay" value="0.50" />
+        <param name="temporal_heading_weight" value="2.4" />
+        <param name="temporal_speed_weight" value="1.2" />
+        
+        <!-- 目标锁定参数 -->
+        <param name="lock_distance_gate" value="1.10" />
+        <param name="lock_yaw_gate" value="1.15" />
+        <param name="lock_hold_timeout" value="1.80" />
+        
+        <!-- 增强型Lagrange乘数法参数 -->
+        <param name="al_outer_iterations" value="3" />
+        <param name="al_violation_tolerance" value="0.02" />
+        <param name="mu_penalty" value="8.0" />
+        <param name="mu_growth" value="1.25" />
+        <param name="mu_penalty_max" value="120.0" />
+        <param name="lambda_max" value="400.0" />
+        <param name="lambda_decay" value="0.80" />
+        
+        <!-- MPC成本矩阵权重 - 关键改进！ -->
+        <param name="q_x" value="2.5" />
+        <param name="q_y" value="16.0" />
+        <param name="q_yaw" value="5.5" />
+        <param name="q_v" value="2.0" />
+        <param name="r_a" value="0.35" />
+        <param name="r_delta" value="0.85" />
+        <param name="r_da" value="1.40" />
+        <param name="r_ddelta" value="2.60" />
+
+        <!-- AL-iLQR 曲率跟踪权重（新增） -->
+        <param name="ilqr_w_curv" value="14.0" />
+        
+        <!-- 终端成本权重 -->
+        <param name="terminal_x_weight" value="4.0" />
+        <param name="terminal_y_weight" value="20.0" />
+        <param name="terminal_yaw_weight" value="7.0" />
+        
+        <!-- 约束违反惩罚 -->
+        <param name="speed_penalty" value="160.0" />
+        <param name="clearance_penalty" value="220.0" />
+        
+    </node>
+</launch>

@@ -1,0 +1,72 @@
+<launch>
+    <node pkg="move_car" type="trajectory_reconstructor" name="trajectory_reconstructor" output="screen">
+        <param name="base_frame" value="base_link" />
+        <param name="tracked_topic" value="/pointpillars/tracked_objects" />
+        <param name="car_topic" value="/car_message" />
+        <param name="carvel_topic" value="/carvel" />
+        <param name="reference_topic" value="/planner/reference_path" />
+        <param name="raw_topic" value="/planner/raw_path" />
+
+        <param name="update_rate" value="50.0" />
+        <param name="wheelbase" value="2.6" />
+        <param name="chassis_speed_scale" value="0.001" />
+
+        <param name="point_spacing" value="0.10" />
+        <param name="max_path_length" value="12.0" />
+        <param name="keep_behind_x" value="0.05" />
+        <param name="min_forward_x" value="0.10" />
+        <param name="lateral_gate" value="2.5" />
+
+        <param name="lock_distance_gate" value="1.00" />
+        <param name="lock_yaw_gate" value="0.60" />
+        <param name="lock_hold_timeout" value="1.80" />
+        <param name="perception_timeout" value="0.45" />
+
+        <param name="max_history_age" value="8.0" />
+        <param name="max_history_points" value="260" />
+        <param name="steer_sign" value="-1.0" />
+        <param name="compensation_gain" value="0.94" />
+        <param name="yaw_rate_filter_alpha" value="0.94" />
+        <param name="max_compensation_yaw_rate" value="0.90" />
+        <param name="min_compensation_speed" value="0.02" />
+        <param name="model_yaw_rate_weight" value="0.35" />
+
+        <param name="curvature_gain" value="0.50" />
+        <param name="fade_base_distance" value="4.0" />
+        <param name="fade_min_distance" value="0.8" />
+        <param name="fade_anchor_scale" value="0.90" />
+
+        <param name="spatial_smooth_sigma" value="0.22" />
+        <param name="temporal_decay_tau" value="1.2" />
+        <param name="huber_delta" value="0.10" />
+        <param name="measurement_pose_alpha" value="0.32" />
+        <param name="measurement_yaw_alpha" value="0.03" />
+        <param name="measurement_along_alpha" value="0.22" />
+        <param name="measurement_cross_alpha" value="0.04" />
+        <param name="displacement_heading_weight" value="0.45" />
+        <param name="displacement_heading_min_distance" value="0.12" />
+        <param name="max_yaw_step_per_update" value="0.16" />
+        <param name="max_yaw_step_per_point" value="0.14" />
+        <param name="reference_min_forward_x" value="0.08" />
+        <param name="reference_max_lateral_abs" value="2.2" />
+        <param name="min_append_dt" value="0.16" />
+        <param name="min_append_distance" value="0.04" />
+        <param name="append_yaw_gate" value="0.10" />
+        <param name="interpolation_resolution" value="0.08" />
+        <param name="max_interpolation_segment_length" value="0.40" />
+        <param name="path_heading_span" value="0.38" />
+        <param name="path_curvature_smooth_alpha" value="0.62" />
+        <param name="path_extension_length" value="5.5" />
+        <param name="path_extension_step" value="0.12" />
+        <param name="min_reference_points" value="18" />
+        <param name="dynamic_window_scale" value="1.05" />
+        <param name="dynamic_window_extra_length" value="2.5" />
+        <param name="curvature_sample_count" value="6" />
+        <param name="max_curvature_estimate" value="0.9" />
+        <param name="target_cost_lateral_weight" value="0.85" />
+        <param name="carvel_angular_is_steer" value="false" />
+        <param name="carvel_yaw_rate_sign" value="1.0" />
+        <param name="auto_yaw_sign_calibration" value="true" />
+        <param name="yaw_sign_vote_threshold" value="12" />
+    </node>
+</launch>
