@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence
+from typing import Iterable, Sequence
 
 
 @dataclass(frozen=True)
@@ -72,8 +72,6 @@ class TrajectoryFramework:
         self._tracker = tracker
 
     def run(self, observations: Iterable[Observation]) -> TrackedTrajectory:
-        preprocessed_observations: List[Observation] = list(
-            self._preprocessor.preprocess(observations)
-        )
+        preprocessed_observations = self._preprocessor.preprocess(observations)
         reconstructed_path = self._reconstructor.reconstruct(preprocessed_observations)
         return self._tracker.track(reconstructed_path)
