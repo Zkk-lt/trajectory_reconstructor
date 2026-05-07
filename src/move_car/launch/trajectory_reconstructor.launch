@@ -101,12 +101,24 @@
     <param name="trail_append_min_distance" value="0.12"/>
     <param name="trail_anchor_update_alpha" value="0.10"/>
     <param name="tail_confirm_min_points" value="3"/>
-    <param name="tail_confirm_min_distance" value="0.04"/>
+    <param name="tail_confirm_min_distance" value="0.05"/>
     <param name="tail_confirm_min_age" value="0.18"/>
+    <param name="tail_confirm_min_time" value="0.25"/>
+    <param name="tail_buffer_max_points" value="12"/>
+    <param name="tail_buffer_max_age" value="0.60"/>
+    <param name="static_tail_keep_points" value="3"/>
+    <param name="publish_tail_suffix" value="false"/>
+    <param name="lead_tail_max_speed" value="1.20"/>
+    <param name="tail_cross_gate" value="0.30"/>
+    <param name="tail_reverse_gate" value="-0.03"/>
+    <param name="static_anchor_res_gate" value="0.04"/>
+    <param name="static_anchor_progress_gate" value="0.04"/>
+    <param name="static_anchor_speed_gate" value="0.06"/>
+    <param name="static_anchor_append_distance_gate" value="0.08"/>
     <param name="confirm_dynamic_score_margin" value="0.08"/>
     <param name="confirm_static_residual_gate" value="0.14"/>
-    <param name="confirm_min_progress" value="0.03"/>
-    <param name="confirm_accum_distance" value="0.03"/>
+    <param name="confirm_min_progress" value="0.05"/>
+    <param name="confirm_accum_distance" value="0.08"/>
     <param name="confirm_accum_timeout" value="0.60"/>
     <param name="ego_static_speed_gate" value="0.05"/>
     <param name="static_release_score_margin" value="0.06"/>
@@ -119,6 +131,7 @@
     <param name="raw_spline_passes" value="4"/>
     <param name="raw_spline_alpha" value="0.45"/>
     <param name="raw_tail_weight_scale" value="0.25"/>
+    <param name="raw_preserve_history_geometry" value="true"/>
     <param name="raw_min_points_for_publish" value="2"/>
     <param name="raw_min_span_for_publish" value="0.05"/>
     <param name="raw_keep_behind_x" value="0.50"/>
@@ -145,5 +158,6 @@
     <param name="reference_resample_ds" value="0.08"/>
     <param name="reference_sg_passes" value="1"/>
     <param name="reference_max_length" value="20.0"/>
+    <param name="reference_follow_raw_only" value="false"/>
   </node>
 </launch>
