@@ -1,3 +1,6 @@
+/*
+改进版：响应更快
+*/
 #include <ros/ros.h>
 
 #include <geometry_msgs/PoseArray.h>

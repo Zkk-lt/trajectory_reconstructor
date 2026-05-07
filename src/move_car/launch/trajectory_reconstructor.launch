@@ -1,3 +1,8 @@
+<!-- /*
+改进版：响应更快
+*/ -->
+
+
 <launch>
   <arg name="pkg" default="move_car"/>
   <arg name="node_type" default="trajectory_reconstructor"/>
