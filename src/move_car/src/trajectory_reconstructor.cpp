@@ -1,3 +1,6 @@
+/*
+改进版：响应更快
+*/
 #include <ros/ros.h>
 
 #include <geometry_msgs/PoseArray.h>
@@ -1165,6 +1168,18 @@ class LeadTrailTracker {
     double static_release_score_margin = 0.06;
     int raw_tail_keep_points = 6;
     double dual_hypothesis_score_margin = 0.02;
+    int tail_buffer_max_points = 12;
+    double tail_buffer_max_age = 0.60;
+    int static_tail_keep_points = 3;
+    bool publish_tail_suffix = false;
+    double tail_confirm_min_time = 0.25;
+    double lead_tail_max_speed = 1.20;
+    double tail_cross_gate = 0.30;
+    double tail_reverse_gate = -0.03;
+    double static_anchor_res_gate = 0.04;
+    double static_anchor_progress_gate = 0.04;
+    double static_anchor_speed_gate = 0.06;
+    double static_anchor_append_distance_gate = 0.08;
   };
 
   explicit LeadTrailTracker(const Config& cfg) : cfg_(cfg) {}
@@ -1723,6 +1738,9 @@ class LeadTrailTracker {
     static_votes_ = 0;
     moving_votes_ = 0;
     resetUnconfirmedAccumulatorUnlocked();
+    has_static_anchor_ = false;
+    static_anchor_stamp_ = ros::Time();
+    static_anchor_heading_ = 0.0;
   }
 
   void pruneWindowUnlocked(const ros::Time& now) {
@@ -1863,8 +1881,18 @@ class LeadTrailTracker {
       return;
     }
     const double static_confidence = estimateStaticConfidenceUnlocked();
+    const double static_residual = meanStaticHypothesisResidualUnlocked();
+    const bool static_like =
+        staticHypothesisWinsUnlocked() ||
+        (static_confidence > 0.45 && static_residual < cfg_.ego_compensated_static_gate);
+    if (!moving_flag_ && static_like) {
+      return;
+    }
     const double adaptive_min_progress =
         cfg_.temporal_min_progress * (1.0 - 0.9 * static_confidence) * (moving_flag_ ? 1.0 : 0.6);
+    if (adaptive_min_progress <= 1e-4) {
+      return;
+    }
     for (size_t i = 1; i < nodes_.size(); ++i) {
       const double tx = std::cos(nodes_[i - 1].yaw);
       const double ty = std::sin(nodes_[i - 1].yaw);
@@ -1890,16 +1918,79 @@ class LeadTrailTracker {
     return pt;
   }
 
+  bool fastRejectTailPointUnlocked(const HistoryPoint2D& candidate) const {
+    if (!tail_buffer_world_.empty()) {
+      const HistoryPoint2D& prev = tail_buffer_world_.back();
+      if (candidate.stamp.isValid() && prev.stamp.isValid() && candidate.stamp <= prev.stamp) {
+        return true;
+      }
+      const double dt = (candidate.stamp.isValid() && prev.stamp.isValid())
+                            ? std::max(1e-3, (candidate.stamp - prev.stamp).toSec())
+                            : 1e-3;
+      const double dx = candidate.x - prev.x;
+      const double dy = candidate.y - prev.y;
+      const double step = hypot2(dx, dy);
+      if (step / dt > cfg_.lead_tail_max_speed) {
+        return true;
+      }
+
+      const double tx = std::cos(prev.heading);
+      const double ty = std::sin(prev.heading);
+      const double along = dx * tx + dy * ty;
+      const double cross = -dx * ty + dy * tx;
+      if (cross > cfg_.tail_cross_gate || cross < -cfg_.tail_cross_gate) {
+        return true;
+      }
+      if (along < cfg_.tail_reverse_gate) {
+        return true;
+      }
+    }
+
+    if (has_static_anchor_) {
+      const double d_anchor =
+          pointDistance(candidate.x, candidate.y, static_anchor_x_, static_anchor_y_);
+      const bool static_like =
+          staticHypothesisWinsUnlocked() &&
+          dynamicTrailProgressUnlocked() < cfg_.static_anchor_progress_gate;
+      if (static_like && d_anchor > std::max(0.20, 2.0 * cfg_.tail_cross_gate)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   void refreshTailBufferUnlocked() {
     tail_buffer_world_.clear();
-    tail_buffer_world_.resize(nodes_.size());
+    if (nodes_.empty()) {
+      return;
+    }
+
+    const ros::Time newest = nodes_.back().stamp;
+    const size_t max_points =
+        static_cast<size_t>(std::max(1, track_.static_mode ? cfg_.static_tail_keep_points
+                                                           : cfg_.tail_buffer_max_points));
     for (size_t i = 0; i < nodes_.size(); ++i) {
-      tail_buffer_world_[i] = nodeToHistoryPointUnlocked(nodes_[i]);
+      if (newest.isValid() && nodes_[i].stamp.isValid() &&
+          (newest - nodes_[i].stamp).toSec() > cfg_.tail_buffer_max_age) {
+        continue;
+      }
+      HistoryPoint2D pt = nodeToHistoryPointUnlocked(nodes_[i]);
+      if (fastRejectTailPointUnlocked(pt)) {
+        last_history_action_ = "tail_fast_rejected";
+        continue;
+      }
+      pt.predicted = true;
+      tail_buffer_world_.push_back(pt);
+      while (tail_buffer_world_.size() > max_points) {
+        tail_buffer_world_.pop_front();
+      }
     }
     if (track_.static_mode && !tail_buffer_world_.empty()) {
       tail_buffer_world_.back().x = static_anchor_x_;
       tail_buffer_world_.back().y = static_anchor_y_;
       tail_buffer_world_.back().heading = track_.heading;
+      tail_buffer_world_.back().predicted = true;
     }
   }
 
@@ -1973,10 +2064,8 @@ class LeadTrailTracker {
     }
 
     const double ego_speed = meanEgoSpeedUnlocked();
-    const double min_confirm_age =
-        (ego_speed < cfg_.ego_static_speed_gate) ? 0.05 : cfg_.tail_confirm_min_age;
-    const double min_confirm_progress =
-        (ego_speed < cfg_.ego_static_speed_gate) ? 0.02 : cfg_.confirm_min_progress;
+    const double min_confirm_age = std::max(cfg_.tail_confirm_min_time, cfg_.tail_confirm_min_age);
+    const double min_confirm_progress = cfg_.confirm_min_progress;
 
     const ros::Time tail_stamp = tail_buffer_world_.back().stamp;
     ros::Time last_confirmed_stamp;
@@ -2010,6 +2099,26 @@ class LeadTrailTracker {
     if (dynamicTrailProgressUnlocked() < min_confirm_progress) {
       last_history_action_ = "history_progress_too_small";
       return;
+    }
+
+    if (tail_buffer_world_.size() >= 2) {
+      size_t checked = 0;
+      size_t consistent = 0;
+      for (size_t i = 1; i < tail_buffer_world_.size(); ++i) {
+        const double dx = tail_buffer_world_[i].x - tail_buffer_world_[i - 1].x;
+        const double dy = tail_buffer_world_[i].y - tail_buffer_world_[i - 1].y;
+        const double along =
+            dx * std::cos(tail_buffer_world_[i - 1].heading) +
+            dy * std::sin(tail_buffer_world_[i - 1].heading);
+        if (along >= cfg_.tail_reverse_gate) {
+          ++consistent;
+        }
+        ++checked;
+      }
+      if (checked > 0 && consistent + 1 < checked) {
+        last_history_action_ = "history_direction_unstable";
+        return;
+      }
     }
 
     const double accum_distance_gate = std::min(cfg_.tail_confirm_min_distance, cfg_.confirm_accum_distance);
@@ -2083,49 +2192,40 @@ class LeadTrailTracker {
 
   std::vector<HistoryPoint2D> exportHistoryUnlocked() const {
     std::vector<HistoryPoint2D> history;
-    history.reserve(confirmed_trail_world_.size() + tail_buffer_world_.size());
+    history.reserve(confirmed_trail_world_.size() + 1);
     for (size_t i = 0; i < confirmed_trail_world_.size(); ++i) {
       HistoryPoint2D pt = confirmed_trail_world_[i];
       pt.predicted = false;
       history.push_back(pt);
     }
 
-    if (tail_buffer_world_.empty()) {
-      return removeNearDuplicatePoints(history, 0.01);
-    }
+    if (has_static_anchor_) {
+      HistoryPoint2D anchor;
+      anchor.stamp = static_anchor_stamp_.isValid()
+                         ? static_anchor_stamp_
+                         : (history.empty() ? ros::Time() : history.back().stamp);
+      anchor.x = static_anchor_x_;
+      anchor.y = static_anchor_y_;
+      anchor.heading = static_anchor_heading_;
+      anchor.speed = 0.0;
+      anchor.curvature = 0.0;
+      anchor.predicted = false;
 
-    if (confirmed_trail_world_.empty()) {
-      return removeNearDuplicatePoints(history, 0.01);
-    }
-
-    const bool allow_tail_suffix = dynamicHypothesisWinsUnlocked() || egoMotionConditionedDynamicUnlocked();
-    if (!allow_tail_suffix) {
-      return removeNearDuplicatePoints(history, 0.01);
-    }
-
-    const size_t keep_tail =
-        std::min(tail_buffer_world_.size(), static_cast<size_t>(std::max(0, cfg_.raw_tail_keep_points)));
-    const size_t start_idx = tail_buffer_world_.size() - keep_tail;
-    const HistoryPoint2D& confirmed_tail = confirmed_trail_world_.back();
-    for (size_t i = start_idx; i < tail_buffer_world_.size(); ++i) {
-      if (tail_buffer_world_[i].predicted) {
-        continue;
-      }
-      const double dist_from_confirmed =
-          pointDistance(confirmed_tail.x, confirmed_tail.y, tail_buffer_world_[i].x, tail_buffer_world_[i].y);
-      if (dist_from_confirmed > std::max(0.25, 3.0 * cfg_.tail_confirm_min_distance)) {
-        continue;
-      }
-      if (!history.empty() &&
-          pointDistance(history.back().x, history.back().y, tail_buffer_world_[i].x, tail_buffer_world_[i].y) <
-              0.02) {
-        HistoryPoint2D pt = tail_buffer_world_[i];
-        pt.predicted = true;
-        history.back() = pt;
+      if (history.empty()) {
+        history.push_back(anchor);
       } else {
-        HistoryPoint2D pt = tail_buffer_world_[i];
-        pt.predicted = true;
-        history.push_back(pt);
+        const double d = pointDistance(history.back().x, history.back().y, anchor.x, anchor.y);
+        if (d > cfg_.static_anchor_append_distance_gate &&
+            (!history.back().stamp.isValid() || !anchor.stamp.isValid() ||
+             anchor.stamp > history.back().stamp)) {
+          history.push_back(anchor);
+        } else {
+          history.back().x = anchor.x;
+          history.back().y = anchor.y;
+          history.back().heading = anchor.heading;
+          history.back().speed = 0.0;
+          history.back().predicted = false;
+        }
       }
     }
 
@@ -2180,6 +2280,13 @@ class LeadTrailTracker {
     const double hs_score = staticHypothesisScoreUnlocked();
     const double hd_score = dynamicHypothesisScoreUnlocked();
     const bool conditioned_dynamic = egoMotionConditionedDynamicUnlocked();
+    const double fixed_frame_progress = dynamicTrailProgressUnlocked();
+    const bool static_anchor_project =
+        std::min(static_measurement_residual, short_window_prediction_residual) <
+            cfg_.static_anchor_res_gate &&
+        fixed_frame_progress < cfg_.static_anchor_progress_gate &&
+        vote_speed < cfg_.static_anchor_speed_gate &&
+        last_innovation_norm_ < cfg_.static_residual_gate;
 
     if (vote_speed < cfg_.lead_static_speed_gate &&
         measurement_speed < cfg_.ego_compensated_static_gate &&
@@ -2213,26 +2320,34 @@ class LeadTrailTracker {
       moving_votes_ = std::max(0, moving_votes_ - 1);
     }
 
-    if (!track_.static_mode && static_votes_ >= cfg_.static_vote_on) {
+    if (!track_.static_mode && (static_votes_ >= cfg_.static_vote_on || static_anchor_project)) {
       track_.static_mode = true;
       static_anchor_x_ = track_.x;
       static_anchor_y_ = track_.y;
+      static_anchor_heading_ = track_.heading;
+      static_anchor_stamp_ = last.stamp;
+      has_static_anchor_ = true;
       moving_flag_ = false;
     }
 
     if (track_.static_mode) {
       const bool strong_static = hs_score + cfg_.static_release_score_margin < hd_score;
-      if (strong_static) {
+      if (strong_static || static_anchor_project) {
         static_anchor_x_ = (1.0 - cfg_.anchor_alpha) * static_anchor_x_ + cfg_.anchor_alpha * track_.x;
         static_anchor_y_ = (1.0 - cfg_.anchor_alpha) * static_anchor_y_ + cfg_.anchor_alpha * track_.y;
+        static_anchor_heading_ =
+            wrapAngle((1.0 - cfg_.anchor_alpha) * static_anchor_heading_ + cfg_.anchor_alpha * track_.heading);
+        static_anchor_stamp_ = last.stamp;
+        has_static_anchor_ = true;
       }
       track_.x = static_anchor_x_;
       track_.y = static_anchor_y_;
       track_.vx = 0.0;
       track_.vy = 0.0;
-      if ((static_votes_ <= cfg_.static_vote_release && moving_votes_ >= cfg_.moving_vote_on) ||
+      if (!static_anchor_project &&
+          ((static_votes_ <= cfg_.static_vote_release && moving_votes_ >= cfg_.moving_vote_on) ||
           conditioned_dynamic ||
-          (hd_score + cfg_.static_release_score_margin < hs_score)) {
+          (hd_score + cfg_.static_release_score_margin < hs_score))) {
         track_.static_mode = false;
         moving_flag_ = true;
       }
@@ -2241,7 +2356,12 @@ class LeadTrailTracker {
     }
 
     refreshTailBufferUnlocked();
-    commitConfirmedTrailPointUnlocked();
+    if (track_.static_mode && static_anchor_project && !conditioned_dynamic) {
+      resetUnconfirmedAccumulatorUnlocked();
+      last_history_action_ = "static_anchor_project";
+    } else {
+      commitConfirmedTrailPointUnlocked();
+    }
 
     if (debug != NULL) {
       debug->history_reason = track_.static_mode ? "static_anchor_update" : last_history_action_;
@@ -2269,6 +2389,9 @@ class LeadTrailTracker {
   std::string last_history_action_ = "init";
   double static_anchor_x_ = 0.0;
   double static_anchor_y_ = 0.0;
+  double static_anchor_heading_ = 0.0;
+  bool has_static_anchor_ = false;
+  ros::Time static_anchor_stamp_;
   double last_innovation_norm_ = 0.0;
   double last_innovation_metric_ = 0.0;
   bool unconfirmed_accum_initialized_ = false;
@@ -2289,6 +2412,7 @@ class PathGenerator {
     int raw_spline_passes = 4;
     double raw_spline_alpha = 0.45;
     double raw_tail_weight_scale = 0.25;
+    bool raw_preserve_history_geometry = true;
     double lead_center_to_path_ref_offset = 0.0;
     int raw_min_points_for_publish = 2;
     double raw_min_span_for_publish = 0.08;
@@ -2314,6 +2438,7 @@ class PathGenerator {
     double reference_resample_ds = 0.08;
     int reference_sg_passes = 1;
     double reference_max_length = 20.0;
+    bool reference_follow_raw_only = false;
   };
 
   explicit PathGenerator(const Config& cfg) : cfg_(cfg) {}
@@ -2331,9 +2456,11 @@ class PathGenerator {
     std::vector<HistoryPoint2D> world_pts = removeNearDuplicatePoints(world_history, 0.01);
     if (world_pts.size() >= 2) {
       recomputeHeading(world_pts);
-      world_pts =
-          smoothWorldSplineLike(world_pts, cfg_.raw_spline_passes, cfg_.raw_spline_alpha, cfg_.raw_tail_weight_scale);
-      world_pts = fitWorldTrajectoryHermite(world_pts, cfg_.raw_fit_ds);
+      if (!cfg_.raw_preserve_history_geometry) {
+        world_pts =
+            smoothWorldSplineLike(world_pts, cfg_.raw_spline_passes, cfg_.raw_spline_alpha, cfg_.raw_tail_weight_scale);
+        world_pts = fitWorldTrajectoryHermite(world_pts, cfg_.raw_fit_ds);
+      }
       world_pts = resampleWorldByArcLength(world_pts, cfg_.raw_resample_ds);
       recomputeHeading(world_pts);
     }
@@ -2411,34 +2538,66 @@ class PathGenerator {
                                                  const std::vector<LocalPathPoint>& raw,
                                                  const EgoPose2D& ego_now,
                                                  TrackerDebugState* debug) const {
-    if (raw.empty() || raw_trail.empty()) {
+    if (raw_trail.empty()) {
       if (debug != NULL) {
         debug->reference_reason = "raw_empty";
         debug->reference_span = 0.0;
       }
       return {};
     }
-    if (static_cast<int>(raw.size()) < cfg_.reference_min_points) {
-      if (debug != NULL) {
-        debug->reference_reason = "reference_insufficient_points";
-        debug->reference_span = polylineLengthLocal(raw);
-      }
-      return {};
-    }
+
     const double raw_span = polylineLengthLocal(raw);
-    if (raw_span < cfg_.reference_min_span) {
+    if (cfg_.reference_follow_raw_only && !raw.empty()) {
       if (debug != NULL) {
-        debug->reference_reason = "reference_span_too_short";
+        debug->reference_reason = "reference_direct_raw";
         debug->reference_span = raw_span;
       }
-      return {};
+      return raw;
     }
 
     std::vector<RefPoint> ref_profile = makeRefPointsFromRawTrail(raw_trail, ego_now, 0.5);
     recomputeRefGeometry(&ref_profile);
-    if (ref_profile.size() < static_cast<size_t>(cfg_.reference_min_points)) {
+    if (ref_profile.empty()) {
       if (debug != NULL) {
         debug->reference_reason = "reference_profile_too_short";
+        debug->reference_span = 0.0;
+      }
+      return {};
+    }
+
+    if (raw.empty() && ref_profile.size() == 1) {
+      std::vector<RefPoint> anchor_ref;
+      RefPoint origin;
+      origin.v_ref = std::min(0.3, std::max(0.10, ref_profile.front().v_ref));
+      origin.a_ref = 0.0;
+      anchor_ref.push_back(origin);
+      const std::vector<RefPoint> connector = buildConnector(ref_profile.front());
+      if (connector.empty()) {
+        anchor_ref.push_back(ref_profile.front());
+      } else {
+        for (size_t i = 1; i < connector.size(); ++i) {
+          anchor_ref.push_back(connector[i]);
+        }
+      }
+      recomputeRefGeometry(&anchor_ref);
+      std::vector<LocalPathPoint> final_local = makeLocalPathFromRefPoints(anchor_ref);
+      if (debug != NULL) {
+        debug->reference_reason = "reference_anchor_connector";
+        debug->reference_span = polylineLengthLocal(final_local);
+      }
+      return final_local;
+    }
+
+    if (static_cast<int>(raw.size()) < cfg_.reference_min_points && ref_profile.size() < 2) {
+      if (debug != NULL) {
+        debug->reference_reason = "reference_insufficient_points";
+        debug->reference_span = raw_span;
+      }
+      return {};
+    }
+    if (!raw.empty() && raw_span < cfg_.reference_min_span && ref_profile.size() < 2) {
+      if (debug != NULL) {
+        debug->reference_reason = "reference_span_too_short";
         debug->reference_span = raw_span;
       }
       return {};
@@ -2898,6 +3057,19 @@ class FixedFrameTrajectoryReconstructor {
     cfg.static_release_score_margin = pnh_.param("static_release_score_margin", 0.06);
     cfg.raw_tail_keep_points = pnh_.param("raw_tail_keep_points", 6);
     cfg.dual_hypothesis_score_margin = pnh_.param("dual_hypothesis_score_margin", 0.02);
+    cfg.tail_buffer_max_points = pnh_.param("tail_buffer_max_points", 12);
+    cfg.tail_buffer_max_age = pnh_.param("tail_buffer_max_age", 0.60);
+    cfg.static_tail_keep_points = pnh_.param("static_tail_keep_points", 3);
+    cfg.publish_tail_suffix = pnh_.param("publish_tail_suffix", false);
+    cfg.tail_confirm_min_time = pnh_.param("tail_confirm_min_time", 0.25);
+    cfg.lead_tail_max_speed = pnh_.param("lead_tail_max_speed", 1.20);
+    cfg.tail_cross_gate = pnh_.param("tail_cross_gate", 0.30);
+    cfg.tail_reverse_gate = pnh_.param("tail_reverse_gate", -0.03);
+    cfg.static_anchor_res_gate = pnh_.param("static_anchor_res_gate", 0.04);
+    cfg.static_anchor_progress_gate = pnh_.param("static_anchor_progress_gate", 0.04);
+    cfg.static_anchor_speed_gate = pnh_.param("static_anchor_speed_gate", 0.06);
+    cfg.static_anchor_append_distance_gate =
+        pnh_.param("static_anchor_append_distance_gate", 0.08);
     return cfg;
   }
 
@@ -2908,6 +3080,7 @@ class FixedFrameTrajectoryReconstructor {
     cfg.raw_spline_passes = pnh_.param("raw_spline_passes", 4);
     cfg.raw_spline_alpha = clampValue(pnh_.param("raw_spline_alpha", 0.45), 0.0, 1.0);
     cfg.raw_tail_weight_scale = clampValue(pnh_.param("raw_tail_weight_scale", 0.25), 0.05, 1.0);
+    cfg.raw_preserve_history_geometry = pnh_.param("raw_preserve_history_geometry", true);
     cfg.lead_center_to_path_ref_offset = pnh_.param("lead_center_to_path_ref_offset", 0.0);
     cfg.raw_min_points_for_publish = pnh_.param("raw_min_points_for_publish", 2);
     cfg.raw_min_span_for_publish = pnh_.param("raw_min_span_for_publish", 0.08);
@@ -2933,6 +3106,7 @@ class FixedFrameTrajectoryReconstructor {
     cfg.reference_resample_ds = pnh_.param("reference_resample_ds", 0.08);
     cfg.reference_sg_passes = pnh_.param("reference_sg_passes", 1);
     cfg.reference_max_length = pnh_.param("reference_max_length", 20.0);
+    cfg.reference_follow_raw_only = pnh_.param("reference_follow_raw_only", false);
     return cfg;
   }
 
@@ -3177,5 +3351,3 @@ int main(int argc, char** argv) {
   ros::spin();
   return 0;
 }
-
-
